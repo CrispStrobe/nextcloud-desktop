@@ -1494,7 +1494,7 @@ private slots:
 
         // After removing the error, rediscovery must allow the next sync to succeed.
         fakeFolder.serverErrorPaths().clear();
-        fakeFolder.syncJournal().wipeErrorBlacklist();
+        [[maybe_unused]] const auto blacklistWiped = fakeFolder.syncJournal().wipeErrorBlacklist();
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
