@@ -1470,14 +1470,43 @@ void PropagateDirectory::slotSubJobsFinished(SyncFileItem::Status status)
     if (!_item->isEmpty() && status == SyncFileItem::Success) {
         _item->_isAnyCaseClashChild = _item->_isAnyCaseClashChild || _subJobs._isAnyCaseClashChild;
         _item->_isAnyInvalidCharChild = _item->_isAnyInvalidCharChild || _subJobs._isAnyInvalidCharChild;
-        // If a directory is renamed, recursively delete any stale items
-        // that may still exist below the old path.
+        // If a directory is renamed, clean up stale records at the old path.
+        // Only delete children that have a confirmed record at the new path; 
+        // schedule the rest for discovery
         if (_item->_instruction == CSYNC_INSTRUCTION_RENAME && _item->_originalFile != _item->_renameTarget) {
-            if (!propagator()->_journal->deleteFileRecord(_item->_originalFile, true)) {
-                qCWarning(lcDirectory) << "could not delete file from local DB" << _item->_originalFile;
+            const auto oldBase = _item->_originalFile;
+            const auto newBase = _item->_renameTarget;
+            QStringList childrenToDelete;
+            const auto filesBelowPath = propagator()->_journal->getFilesBelowPath(oldBase.toUtf8(), [&](const SyncJournalFileRecord &record) {
+                const auto oldPath = QString::fromUtf8(record._path);
+                const auto newPath = newBase + oldPath.mid(oldBase.size());
+                SyncJournalFileRecord newRecord;
+                if (!propagator()->_journal->getFileRecord(newPath, &newRecord) && !newRecord.isValid()) {
+                    qCWarning(lcDirectory) << "child rename incomplete, scheduling for rediscovery:" << oldPath;
+                    propagator()->_journal->schedulePathForRemoteDiscovery(oldPath);
+                    propagator()->_anotherSyncNeeded = true;
+                    return false;
+                }
+
+                childrenToDelete.append(oldPath);
+                return true;
+            });
+
+            auto deleteFile = filesBelowPath;
+            for (const auto &child : std::as_const(childrenToDelete)) {
+                if (!propagator()->_journal->deleteFileRecord(child)) {
+                    deleteFile = false;
+                }
+            }
+            if (!propagator()->_journal->deleteFileRecord(oldBase)) {
+                deleteFile = false;
+            }
+
+            if (!deleteFile) {
+                qCWarning(lcDirectory) << "could not delete file from local DB" << oldBase;
                 _state = Finished;
                 status = _item->_status = SyncFileItem::FatalError;
-                _item->_errorString = tr("Could not delete file %1 from local DB").arg(_item->_originalFile);
+                _item->_errorString = tr("Could not delete file %1 from local DB").arg(oldBase);
                 qCInfo(lcPropagator) << "PropagateDirectory::slotSubJobsFinished"
                                      << "emit finished" << status;
                 emit finished(status);
