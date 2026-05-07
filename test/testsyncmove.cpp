@@ -1423,6 +1423,117 @@ private slots:
 
         qDebug() << fakeFolder.currentLocalState();
     }
+    // Fix: clear lock token and locked state when propagating child records through
+    // PropagateLocalRename (server-initiated rename applied locally).
+    void testLockTokenClearedOnServerInitiatedRename()
+    {
+        FakeFolder fakeFolder{FileInfo{}};
+        fakeFolder.remoteModifier().mkdir("D");
+        fakeFolder.remoteModifier().insert("D/file.txt", 64);
+        QVERIFY(fakeFolder.syncOnce());
+
+        // Inject a stale lock token directly into the journal.
+        {
+            SyncJournalFileRecord record;
+            QVERIFY(fakeFolder.syncJournal().getFileRecord(QByteArray("D/file.txt"), &record));
+            record._lockstate._locked = true;
+            record._lockstate._lockOwnerType = static_cast<qint64>(SyncFileItem::LockOwnerType::TokenLock);
+            record._lockstate._lockToken = QStringLiteral("stale-token");
+            QVERIFY(fakeFolder.syncJournal().setFileRecord(record));
+        }
+
+        // Server renames D → D2; client applies it locally via PropagateLocalRename.
+        fakeFolder.remoteModifier().rename("D", "D2");
+        QVERIFY(fakeFolder.syncOnce());
+
+        // Child record at the new path must have its lock state cleared.
+        SyncJournalFileRecord moved;
+        QVERIFY(fakeFolder.syncJournal().getFileRecord(QByteArray("D2/file.txt"), &moved));
+        QVERIFY(moved.isValid());
+        QVERIFY(moved._lockstate._lockToken.isEmpty());
+        QVERIFY(!moved._lockstate._locked);
+    }
+
+    // Fix: clear locked state when propagating child records through
+    // PropagateRemoteMove (client-initiated rename sent as MOVE to server).
+    void testLockedStateClearedOnClientInitiatedRename()
+    {
+        FakeFolder fakeFolder{FileInfo{}};
+        fakeFolder.remoteModifier().mkdir("D");
+        fakeFolder.remoteModifier().insert("D/file.txt", 64);
+        QVERIFY(fakeFolder.syncOnce());
+
+        // Mark the file as locked on the server so discovery reports it as locked.
+        fakeFolder.remoteModifier().modifyLockState(
+            QStringLiteral("D/file.txt"), FileModifier::LockState::FileLocked,
+            static_cast<int>(SyncFileItem::LockOwnerType::UserLock),
+            QStringLiteral("User"), QStringLiteral("userId"),
+            QStringLiteral("editor"), 1234567890, 3600);
+        QVERIFY(fakeFolder.syncOnce()); // Journal now has _locked = true for D/file.txt.
+
+        // Client renames D → D2; PropagateRemoteMove runs for the directory and children.
+        fakeFolder.localModifier().rename("D", "D2");
+        QVERIFY(fakeFolder.syncOnce());
+
+        // Locked state must be cleared in the new-path record.
+        SyncJournalFileRecord moved;
+        QVERIFY(fakeFolder.syncJournal().getFileRecord(QByteArray("D2/file.txt"), &moved));
+        QVERIFY(moved.isValid());
+        QVERIFY(!moved._lockstate._locked);
+    }
+
+    // Fix: clear stale lock token from journal and schedule rediscovery on 412.
+    void testUpload412SchedulesRediscovery()
+    {
+        FakeFolder fakeFolder{FileInfo{QString{}, {FileInfo{QStringLiteral("D"), {{"file.txt", 64}}}}}};
+        QVERIFY(fakeFolder.syncOnce());
+
+        fakeFolder.localModifier().appendByte("D/file.txt");
+        fakeFolder.serverErrorPaths().append("D/file.txt", 412);
+        QVERIFY(!fakeFolder.syncOnce()); // Upload fails with 412.
+
+        // After removing the error, rediscovery must allow the next sync to succeed.
+        fakeFolder.serverErrorPaths().clear();
+        fakeFolder.syncJournal().wipeErrorBlacklist();
+        QVERIFY(fakeFolder.syncOnce());
+        QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
+    }
+
+    // Fix: protect incomplete child renames from the post-rename bulk journal delete.
+    // When a folder is renamed and a child file is also independently renamed, a
+    // failure of the child's MOVE must not erase the child's old-path journal record.
+    void testPostRenameBulkDeletePreservesFailedChildRename()
+    {
+        FakeFolder fakeFolder{FileInfo{}};
+        fakeFolder.remoteModifier().mkdir("D");
+        fakeFolder.remoteModifier().insert("D/file.txt", 64);
+        QVERIFY(fakeFolder.syncOnce());
+
+        // Rename the folder AND rename the file inside it. Discovery will emit
+        // RENAME for D→D2 and a separate MOVE for D/file.txt→D2/renamed.txt.
+        fakeFolder.localModifier().rename("D", "D2");
+        fakeFolder.localModifier().rename("D2/file.txt", "D2/renamed.txt");
+
+        // Fail the MOVE for the file rename so the child job ends with an error.
+        QObject context;
+        fakeFolder.setServerOverride([&context](QNetworkAccessManager::Operation op,
+                                                const QNetworkRequest &req,
+                                                QIODevice *) -> QNetworkReply * {
+            if (op == QNetworkAccessManager::CustomOperation
+                && req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == QStringLiteral("MOVE")
+                && req.url().path().endsWith(QStringLiteral("/D2/file.txt"))) {
+                return new FakeErrorReply(op, req, &context, 503);
+            }
+            return nullptr;
+        });
+
+        QVERIFY(!fakeFolder.syncOnce()); // D→D2 succeeds; file MOVE fails.
+
+        // The old-path record must still be in the journal so the next sync can recover.
+        SyncJournalFileRecord record;
+        QVERIFY(fakeFolder.syncJournal().getFileRecord(QByteArray("D/file.txt"), &record));
+        QVERIFY(record.isValid());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestSyncMove)
