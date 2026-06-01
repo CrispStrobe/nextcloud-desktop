@@ -38,9 +38,6 @@ namespace WizardCommon {
         Page_ServerSetup,
         Page_HttpCreds,
         Page_Flow2AuthCreds,
-#ifdef WITH_WEBENGINE
-        Page_WebView,
-#endif // WITH_WEBENGINE
         Page_TermsOfService,
         Page_AdvancedSetup,
     };

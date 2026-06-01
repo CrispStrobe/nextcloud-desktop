@@ -30,7 +30,6 @@ class OwncloudAdvancedSetupPage;
 class OwncloudWizardResultPage;
 class AbstractCredentials;
 class AbstractCredentialsWizardPage;
-class WebViewPage;
 class Flow2AuthCredsPage;
 
 /**
@@ -58,7 +57,6 @@ public:
     [[nodiscard]] QString ocUrl() const;
     [[nodiscard]] QString localFolder() const;
     [[nodiscard]] QStringList selectiveSyncBlacklist() const;
-    [[nodiscard]] bool useFlow2() const;
     [[nodiscard]] bool useVirtualFileSync() const;
     [[nodiscard]] bool isConfirmBigFolderChecked() const;
     [[nodiscard]] bool needsToAcceptTermsOfService() const;
@@ -128,13 +126,10 @@ private:
     OwncloudAdvancedSetupPage *_advancedSetupPage = nullptr;
     OwncloudWizardResultPage *_resultPage = nullptr;
     AbstractCredentialsWizardPage *_credentialsPage = nullptr;
-    WebViewPage*_webViewPage = nullptr;
 
     QStringList _setupLog;
 
     bool _registration = false;
-
-    bool _useFlow2 = ConfigFile().forceLoginV2();
 
     bool _needsToAcceptTermsOfService = false;
 

@@ -20,7 +20,6 @@
 #include "wizard/owncloudhttpcredspage.h"
 #include "wizard/termsofservicewizardpage.h"
 #include "wizard/owncloudadvancedsetuppage.h"
-#include "wizard/webviewpage.h"
 #include "wizard/flow2authcredspage.h"
 
 #include "common/vfs.h"
@@ -51,11 +50,6 @@ OwncloudWizard::OwncloudWizard(QWidget *parent)
     , _flow2CredsPage(new Flow2AuthCredsPage)
     , _termsOfServicePage(new TermsOfServiceWizardPage)
     , _advancedSetupPage(new OwncloudAdvancedSetupPage(this))
-#ifdef WITH_WEBENGINE
-    , _webViewPage(new WebViewPage(this))
-#else // WITH_WEBENGINE
-    , _webViewPage(nullptr)
-#endif // WITH_WEBENGINE
 {
 #ifdef Q_OS_MACOS
     auto *fgbg = new ForegroundBackground();
@@ -70,11 +64,6 @@ OwncloudWizard::OwncloudWizard(QWidget *parent)
     setPage(WizardCommon::Page_Flow2AuthCreds, _flow2CredsPage);
     setPage(WizardCommon::Page_TermsOfService, _termsOfServicePage);
     setPage(WizardCommon::Page_AdvancedSetup, _advancedSetupPage);
-#ifdef WITH_WEBENGINE
-    if (!useFlow2()) {
-        setPage(WizardCommon::Page_WebView, _webViewPage);
-    }
-#endif // WITH_WEBENGINE
 
     connect(this, &QDialog::finished, this, &OwncloudWizard::basicSetupFinished);
 
@@ -85,11 +74,6 @@ OwncloudWizard::OwncloudWizard(QWidget *parent)
     connect(_setupPage, &OwncloudSetupPage::determineAuthType, this, &OwncloudWizard::determineAuthType);
     connect(_httpCredsPage, &OwncloudHttpCredsPage::connectToOCUrl, this, &OwncloudWizard::connectToOCUrl);
     connect(_flow2CredsPage, &Flow2AuthCredsPage::connectToOCUrl, this, &OwncloudWizard::connectToOCUrl);
-#ifdef WITH_WEBENGINE
-    if (!useFlow2()) {
-        connect(_webViewPage, &WebViewPage::connectToOCUrl, this, &OwncloudWizard::connectToOCUrl);
-    }
-#endif // WITH_WEBENGINE
     connect(_advancedSetupPage, &OwncloudAdvancedSetupPage::createLocalAndRemoteFolders,
         this, &OwncloudWizard::createLocalAndRemoteFolders);
     connect(this, &QWizard::customButtonClicked, this, &OwncloudWizard::slotCustomButtonClicked);
@@ -210,11 +194,6 @@ QStringList OwncloudWizard::selectiveSyncBlacklist() const
     return _advancedSetupPage->selectiveSyncBlacklist();
 }
 
-bool OwncloudWizard::useFlow2() const
-{
-    return _useFlow2;
-}
-
 bool OwncloudWizard::useVirtualFileSync() const
 {
     return _advancedSetupPage->useVirtualFileSync();
@@ -276,14 +255,6 @@ void OwncloudWizard::successfulStep()
         _flow2CredsPage->setConnected();
         break;
 
-#ifdef WITH_WEBENGINE
-    case WizardCommon::Page_WebView:
-        if (!this->useFlow2()) {
-            _webViewPage->setConnected();
-        }
-        break;
-#endif // WITH_WEBENGINE
-
     case WizardCommon::Page_TermsOfService:
         // nothing to do here
         break;
@@ -326,14 +297,6 @@ void OwncloudWizard::setAuthType(DetermineAuthTypeJob::AuthType type)
 
     if (type == DetermineAuthTypeJob::LoginFlowV2) {
         _credentialsPage = _flow2CredsPage;
-#ifdef WITH_WEBENGINE
-    } else if (type == DetermineAuthTypeJob::WebViewFlow) {
-        if(this->useFlow2()) {
-            _credentialsPage = _flow2CredsPage;
-        } else {
-            _credentialsPage = _webViewPage;
-        }
-#endif // WITH_WEBENGINE
     } else { // try Basic auth even for "Unknown"
         _credentialsPage = _httpCredsPage;
     }
@@ -357,11 +320,7 @@ void OwncloudWizard::slotCurrentPageChanged(int id)
 
         // Need to set it from here, otherwise it has no effect
         _welcomePage->setLoginButtonDefault();
-    } else if (
-#ifdef WITH_WEBENGINE
-        id == WizardCommon::Page_WebView ||
-#endif // WITH_WEBENGINE
-        id == WizardCommon::Page_Flow2AuthCreds ||
+    } else if (id == WizardCommon::Page_Flow2AuthCreds ||
         id == WizardCommon::Page_TermsOfService) {
         setButtonLayout({QWizard::BackButton, QWizard::Stretch});
     } else if (id == WizardCommon::Page_AdvancedSetup) {
@@ -395,9 +354,6 @@ void OwncloudWizard::displayError(const QString &msg, bool retryHTTPonly)
     switch (static_cast<WizardCommon::Pages>(currentId())) {
     case WizardCommon::Page_Welcome:
     case WizardCommon::Page_Flow2AuthCreds:
-#ifdef WITH_WEBENGINE
-    case WizardCommon::Page_WebView:
-#endif // WITH_WEBENGINE
     case WizardCommon::Page_TermsOfService:
         break;
 

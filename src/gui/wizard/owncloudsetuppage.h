@@ -88,9 +88,6 @@ private:
     WizardProxySettingsDialog *_proxySettingsDialog = nullptr;
     WizardProxySettingsDialog::WizardProxySettings _proxySettings;
     QMetaObject::Connection _proxyButtonIsConnected;
-
-    // Grab the forceLoginV2-setting from the wizard
-    bool useFlow2 = _ocWizard->useFlow2();
 };
 
 } // namespace OCC
