@@ -37,6 +37,18 @@ struct MissingPermissionsPropfindReply : FakePropfindReply {
     }
 };
 
+// Reply that queues its own deletion so it fires inside LsColJob::finished()'s processEvents().
+struct FakePropfindReplyWithPendingDeletion : FakePropfindReply {
+    FakePropfindReplyWithPendingDeletion(FileInfo &remoteRootFileInfo, QNetworkAccessManager::Operation op,
+                                         const QNetworkRequest &request, QObject *parent)
+        : FakePropfindReply(remoteRootFileInfo, op, request, parent)
+    {
+        // respond() is queued before this timer, so it fires first; the deletion fires
+        // inside LsColJob::finished()'s processEvents() call.
+        QTimer::singleShot(0, this, &QObject::deleteLater);
+    }
+};
+
 
 enum ErrorKind : int {
     // Lower code are corresponding to HTML error code
