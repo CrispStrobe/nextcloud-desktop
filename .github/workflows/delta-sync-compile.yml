@@ -58,6 +58,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install inkscape
+        shell: pwsh
+        run: choco install inkscape
+
       - name: Install Craft Master with Nextcloud Client Deps
         shell: pwsh
         run: |
