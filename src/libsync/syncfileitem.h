@@ -278,6 +278,7 @@ public:
     quint16 _httpErrorCode = 0;
     RemotePermissions _remotePerm;
     QString _errorString; // Contains a string only in case of error
+    QString _deltaSyncInfo; // Delta sync savings info (e.g. "2/125 blocks, 98.4% saved")
     QString _errorExceptionName; // Contains a server exception string only in case of error
     QString _errorExceptionMessage; // Contains a server exception message string only in case of error
     QByteArray _responseTimeStamp;

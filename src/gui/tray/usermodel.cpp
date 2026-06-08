@@ -1288,6 +1288,20 @@ void User::processCompletedSyncItem(const Folder *folder, const SyncFileItemPtr 
             activity._message = messageFromFileAction(activity._fileAction, fileName);
         }
 
+        // Append delta sync savings info if available
+        if (!item->_deltaSyncInfo.isEmpty()) {
+            activity._message += QStringLiteral(" (delta sync: ") + item->_deltaSyncInfo + QStringLiteral(")");
+
+            // Show desktop notification for significant savings (> 50%)
+            if (item->_deltaSyncInfo.contains(QLatin1String("saved"))
+                && ConfigFile().optionalDesktopNotifications()) {
+                showDesktopNotification(
+                    tr("Delta sync: %1").arg(fileName),
+                    item->_deltaSyncInfo,
+                    -static_cast<qint64>(qHash(QStringLiteral("delta:") + item->_file)));
+            }
+        }
+
         if(activity._fileAction != "file_deleted" && !item->isEmpty()) {
             const auto localFiles = FolderMan::instance()->findFileInLocalFolders(folder->remotePathTrailingSlash() + item->_file, account());
             if (!localFiles.isEmpty()) {
