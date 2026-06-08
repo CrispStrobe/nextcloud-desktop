@@ -118,6 +118,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Homebrew dependencies
+        run: brew install homebrew/cask/inkscape
+
       - name: Install Craft Master with Nextcloud Client Deps
         run: |
           git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git "$CRAFT_MASTER_LOCATION"
