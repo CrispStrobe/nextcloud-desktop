@@ -1,7 +1,8 @@
-name: Delta Sync Compile Check
+name: Delta Sync Build & Release
 on:
   push:
     branches: [delta-sync]
+    tags: ['v*']
   pull_request:
     branches: [master]
 
@@ -9,41 +10,36 @@ concurrency:
   group: delta-sync-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write  # needed for release creation
+
 jobs:
   build-linux:
-    name: Linux GCC compile
+    name: Linux GCC
     runs-on: ubuntu-latest
-    container: ghcr.io/nextcloud/continuous-integration-client-qt6:client-sid-6.10.2-2
+    container: ghcr.io/nextcloud/continuous-integration-client-appimage-qt6:client-appimage-el8-6.10.1-1
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Configure
+      - name: Build AppImage
+        id: build
         run: |
-          mkdir build && cd build
-          cmake .. -G Ninja \
-            -DCMAKE_C_COMPILER=gcc \
-            -DCMAKE_CXX_COMPILER=g++ \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DQT_MAJOR_VERSION=6 \
-            -DQUICK_COMPILER=ON \
-            -DBUILD_UPDATER=ON \
-            -DBUILD_TESTING=1 \
-            -DCMAKE_CXX_FLAGS=-Werror
+          BUILDNR=${GITHUB_RUN_ID} VERSION_SUFFIX=delta-sync BUILD_UPDATER=ON \
+            DESKTOP_CLIENT_ROOT=$(pwd) EXECUTABLE_NAME=nextcloud \
+            QT_BASE_DIR=/root/linux-gcc-x86_64 \
+            /bin/bash -c "./admin/linux/build-appimage.sh"
 
-      - name: Compile
-        run: cd build && ninja
-
-      - name: Run tests
-        run: |
-          cd build
-          useradd -m -s /bin/bash test
-          chown -R test:test .
-          su -c 'xvfb-run ctest --output-on-failure' test
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcloud-delta-sync-linux-appimage
+          path: Nextcloud-*.AppImage*
+          compression-level: 0
 
   build-windows:
-    name: Windows MSVC compile
+    name: Windows MSVC
     runs-on: windows-2022
     env:
       CRAFT_TARGET: windows-msvc2022_64-cl
@@ -62,7 +58,7 @@ jobs:
         shell: pwsh
         run: choco install inkscape
 
-      - name: Install Craft Master with Nextcloud Client Deps
+      - name: Install Craft Master with deps
         shell: pwsh
         run: |
           & cmd /C "git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git ${{ env.CRAFT_MASTER_LOCATION }} 2>&1"
@@ -97,10 +93,33 @@ jobs:
 
           craft --test nextcloud-client
 
+      - name: Package
+        shell: pwsh
+        run: |
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --package nextcloud-client
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/binaries" -Force
+          Copy-Item "$env:HOME/craft/binaries/*" "${{ github.workspace }}/binaries/" -ErrorAction SilentlyContinue
+          Get-ChildItem "${{ github.workspace }}/${{ env.CRAFT_TARGET }}/tmp/*.exe" -ErrorAction SilentlyContinue | Copy-Item -Destination "${{ github.workspace }}/binaries/"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcloud-delta-sync-windows
+          path: ${{ github.workspace }}/binaries/*
+
   build-macos:
-    name: macOS Clang compile
+    name: macOS Clang
     runs-on: macos-15
-    continue-on-error: true  # macOS Craft deps may fail due to upstream mirrors
+    continue-on-error: true
     env:
       CRAFT_TARGET: macos-clang-arm64
       CRAFT_MASTER_LOCATION: ${{ github.workspace }}/CraftMaster
@@ -121,7 +140,7 @@ jobs:
       - name: Install Homebrew dependencies
         run: brew install homebrew/cask/inkscape
 
-      - name: Install Craft Master with Nextcloud Client Deps
+      - name: Install Craft Master with deps
         run: |
           git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git "$CRAFT_MASTER_LOCATION"
 
@@ -149,10 +168,55 @@ jobs:
           craft --set srcDir="$GITHUB_WORKSPACE" nextcloud-client
           craft --no-cache nextcloud-client
 
-      - name: Run tests
+      - name: Package
         run: |
           function craft() {
               python3 "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
           }
 
-          craft --test nextcloud-client
+          craft --package nextcloud-client
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p "${{ github.workspace }}/binaries"
+          cp -v ~/craft/binaries/* "${{ github.workspace }}/binaries/" 2>/dev/null || true
+          find "${{ github.workspace }}/$CRAFT_TARGET" -name "*.dmg" -exec cp -v {} "${{ github.workspace }}/binaries/" \; 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcloud-delta-sync-macos
+          path: ${{ github.workspace }}/binaries/*
+
+  release:
+    name: Create Release
+    needs: [build-linux, build-windows]
+    if: github.ref == 'refs/heads/delta-sync'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | head -50
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: delta-sync-latest
+          name: "Nextcloud Desktop — Delta Sync (latest build)"
+          body: |
+            **Nextcloud desktop client with block-level delta sync.**
+
+            When the [crispcloud_delta](https://github.com/CrispStrobe/crispcloud-delta-sync) server app is installed, this client uploads only changed 4 MB blocks instead of full files.
+
+            - Settings toggle: General > Advanced > "Enable block-level delta sync"
+            - Activity display shows per-file bandwidth savings
+            - Desktop notifications on sync completion
+
+            Built from `delta-sync` branch, commit ${{ github.sha }}.
+          draft: false
+          prerelease: true
+          files: artifacts/**/*
+          make_latest: false
