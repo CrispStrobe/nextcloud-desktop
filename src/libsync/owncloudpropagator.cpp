@@ -10,6 +10,7 @@
 #include "propagatedownload.h"
 #include "propagateupload.h"
 #include "propagateuploaddelta.h"
+#include "configfile.h"
 #include "propagateremotedelete.h"
 #include "propagateremotemove.h"
 #include "propagateremotemkdir.h"
@@ -412,10 +413,12 @@ std::unique_ptr<PropagateUploadFileCommon> OwncloudPropagator::createUploadJob(S
 {
     auto job = std::unique_ptr<PropagateUploadFileCommon>{};
 
-    // Try block-level delta sync for large files when the server app is available.
-    // The delta job probes the server and falls back to normal upload if unavailable.
+    // Try block-level delta sync for large files when enabled in settings
+    // and the server app is available. Falls back to normal upload if unavailable.
     static constexpr qint64 deltaSyncMinSize = 10 * 1024 * 1024; // 10 MB
-    if (item->_size >= deltaSyncMinSize && account()->capabilities().deltaSyncAvailable()) {
+    if (item->_size >= deltaSyncMinSize
+        && ConfigFile().deltaSyncEnabled()
+        && account()->capabilities().deltaSyncAvailable()) {
         job = std::make_unique<PropagateUploadFileDelta>(this, item);
     } else if (item->_size > syncOptions()._initialChunkSize && account()->capabilities().chunkingNg()) {
         // Item is above _initialChunkSize, thus will be classified as to be chunked
