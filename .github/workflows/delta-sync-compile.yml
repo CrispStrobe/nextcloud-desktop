@@ -181,10 +181,14 @@ jobs:
           craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|master|"
           craft --add-blueprint-repository "https://github.com/nextcloud/desktop-client-blueprints.git|master|"
 
-          # Pre-download zlib from GitHub (zlib.net removed 1.3.1)
-          mkdir -p "${{ github.workspace }}/$CRAFT_TARGET/download/archives/libs/zlib"
+          # Pre-download sources that CraftMaster's wget fails to fetch (cert/mirror issues)
+          for pkg_dir in libs/zlib libs/fontconfig; do
+            mkdir -p "${{ github.workspace }}/$CRAFT_TARGET/download/archives/$pkg_dir"
+          done
           curl -fsSL -o "${{ github.workspace }}/$CRAFT_TARGET/download/archives/libs/zlib/zlib-1.3.1.tar.xz" \
             https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.xz || true
+          curl -fsSL -o "${{ github.workspace }}/$CRAFT_TARGET/download/archives/libs/fontconfig/fontconfig-2.15.0.tar.gz" \
+            https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.gz || true
 
           craft craft
           craft --install-deps nextcloud-client
