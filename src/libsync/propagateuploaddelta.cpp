@@ -1,0 +1,401 @@
+/*
+ * SPDX-FileCopyrightText: 2026 CrispCloud Contributors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Block-level delta sync upload implementation.
+ */
+
+#include "propagateuploaddelta.h"
+#include "networkjobs.h"
+#include "account.h"
+#include "owncloudpropagator.h"
+#include "common/syncjournaldb.h"
+#include "filesystem.h"
+#include "propagateupload.h"
+
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QNetworkReply>
+#include <QBuffer>
+
+namespace OCC {
+
+Q_LOGGING_CATEGORY(lcPropagateUploadDelta, "nextcloud.sync.propagator.upload.delta", QtInfoMsg)
+
+// Adler-32 modulus (largest prime below 2^16)
+static constexpr quint32 AdlerMod = 65521;
+
+PropagateUploadFileDelta::PropagateUploadFileDelta(OwncloudPropagator *propagator, const SyncFileItemPtr &item)
+    : PropagateUploadFileCommon(propagator, item)
+{
+}
+
+quint32 PropagateUploadFileDelta::adler32(const QByteArray &data)
+{
+    quint32 a = 1, b = 0;
+    for (int i = 0; i < data.size(); ++i) {
+        a = (a + static_cast<quint8>(data[i])) % AdlerMod;
+        b = (b + a) % AdlerMod;
+    }
+    return (b << 16) | a;
+}
+
+BlockMap PropagateUploadFileDelta::computeLocalBlockMap(const QString &filePath, qint64 blockSize)
+{
+    BlockMap map;
+    map.filePath = filePath;
+    map.blockSize = blockSize;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qCWarning(lcPropagateUploadDelta) << "Cannot open file:" << filePath;
+        return map;
+    }
+
+    map.totalSize = file.size();
+    map.blockCount = map.totalSize == 0
+        ? 0
+        : static_cast<int>((map.totalSize + blockSize - 1) / blockSize);
+
+    for (int i = 0; i < map.blockCount; ++i) {
+        qint64 offset = static_cast<qint64>(i) * blockSize;
+        qint64 remaining = qMin(blockSize, map.totalSize - offset);
+        QByteArray data = file.read(remaining);
+        if (data.size() < remaining) {
+            qCWarning(lcPropagateUploadDelta) << "Short read at block" << i;
+            break;
+        }
+
+        BlockSignature sig;
+        sig.blockIndex = i;
+        sig.offset = offset;
+        sig.size = data.size();
+        sig.weakHash = adler32(data);
+
+        QCryptographicHash sha256(QCryptographicHash::Sha256);
+        sha256.addData(data);
+        sig.strongHash = sha256.result().toHex();
+
+        map.signatures.append(sig);
+    }
+
+    return map;
+}
+
+BlockMap PropagateUploadFileDelta::parseServerBlockMap(const QByteArray &json)
+{
+    BlockMap map;
+    QJsonDocument doc = QJsonDocument::fromJson(json);
+    if (doc.isNull() || !doc.isObject()) return map;
+
+    QJsonObject obj = doc.object();
+    map.filePath = obj[QStringLiteral("filePath")].toString();
+    map.totalSize = obj[QStringLiteral("totalSize")].toVariant().toLongLong();
+    map.blockSize = obj[QStringLiteral("blockSize")].toVariant().toLongLong();
+    map.blockCount = obj[QStringLiteral("blockCount")].toInt();
+    map.etag = obj[QStringLiteral("etag")].toString();
+
+    QJsonArray sigs = obj[QStringLiteral("signatures")].toArray();
+    for (const auto &val : sigs) {
+        QJsonObject s = val.toObject();
+        BlockSignature sig;
+        sig.blockIndex = s[QStringLiteral("blockIndex")].toInt();
+        sig.offset = s[QStringLiteral("offset")].toVariant().toLongLong();
+        sig.size = s[QStringLiteral("size")].toVariant().toLongLong();
+        sig.weakHash = static_cast<quint32>(s[QStringLiteral("weakHash")].toVariant().toULongLong());
+        sig.strongHash = s[QStringLiteral("strongHash")].toString().toLatin1();
+        map.signatures.append(sig);
+    }
+
+    return map;
+}
+
+QVector<int> PropagateUploadFileDelta::findChangedBlocks(const BlockMap &local, const BlockMap &remote)
+{
+    QHash<int, const BlockSignature *> remoteByIndex;
+    for (const auto &sig : remote.signatures) {
+        remoteByIndex[sig.blockIndex] = &sig;
+    }
+
+    QVector<int> changed;
+    for (const auto &localSig : local.signatures) {
+        auto it = remoteByIndex.find(localSig.blockIndex);
+        if (it == remoteByIndex.end()
+            || localSig.weakHash != (*it)->weakHash
+            || localSig.strongHash != (*it)->strongHash) {
+            changed.append(localSig.blockIndex);
+        }
+    }
+    return changed;
+}
+
+void PropagateUploadFileDelta::doStartUpload()
+{
+    // Only attempt delta sync for files above threshold
+    if (_fileToUpload._size < MinDeltaSyncSize) {
+        qCInfo(lcPropagateUploadDelta) << "File too small for delta sync, falling back:"
+                                       << _fileToUpload._size << "bytes";
+        fallbackToNormalUpload();
+        return;
+    }
+
+    // Probe the server for the crispcloud_delta app
+    _deltaAppBase = QStringLiteral("/index.php/apps/crispcloud_delta");
+
+    auto *job = new SimpleNetworkJob(propagator()->account(), this);
+    auto url = propagator()->account()->url();
+    url.setPath(url.path() + _deltaAppBase + QStringLiteral("/api/status"));
+
+    QNetworkRequest req;
+    req.setUrl(url);
+    job->startRequest("GET", url, req);
+    connect(job, &SimpleNetworkJob::finishedSignal, this, &PropagateUploadFileDelta::slotStatusCheckFinished);
+}
+
+void PropagateUploadFileDelta::slotStatusCheckFinished()
+{
+    auto *job = qobject_cast<SimpleNetworkJob *>(sender());
+    if (!job) {
+        fallbackToNormalUpload();
+        return;
+    }
+
+    auto reply = job->reply();
+    if (reply->error() != QNetworkReply::NoError || reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {
+        qCInfo(lcPropagateUploadDelta) << "Delta sync app not available, falling back to normal upload";
+        fallbackToNormalUpload();
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    if (doc.isNull() || doc.object()[QStringLiteral("app")].toString() != QStringLiteral("crispcloud_delta")) {
+        qCInfo(lcPropagateUploadDelta) << "Delta sync app response invalid, falling back";
+        fallbackToNormalUpload();
+        return;
+    }
+
+    _deltaAvailable = true;
+    qCInfo(lcPropagateUploadDelta) << "Delta sync app detected, fetching remote block map for"
+                                   << _fileToUpload._file;
+
+    // Fetch remote block map
+    auto url = propagator()->account()->url();
+    // The remote path relative to user root
+    QString remotePath = _item->_file;
+    url.setPath(url.path() + _deltaAppBase + QStringLiteral("/api/blockmap/") + remotePath);
+
+    auto *bmJob = new SimpleNetworkJob(propagator()->account(), this);
+    QNetworkRequest req;
+    req.setUrl(url);
+    bmJob->startRequest("GET", url, req);
+    connect(bmJob, &SimpleNetworkJob::finishedSignal, this, &PropagateUploadFileDelta::slotBlockMapFetched);
+}
+
+void PropagateUploadFileDelta::slotBlockMapFetched()
+{
+    auto *job = qobject_cast<SimpleNetworkJob *>(sender());
+    if (!job) {
+        fallbackToNormalUpload();
+        return;
+    }
+
+    auto reply = job->reply();
+    int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    if (httpCode == 404) {
+        // File doesn't exist on server yet — can't do delta, do normal upload
+        qCInfo(lcPropagateUploadDelta) << "Remote file not found (new file), falling back to normal upload";
+        fallbackToNormalUpload();
+        return;
+    }
+
+    if (reply->error() != QNetworkReply::NoError || httpCode != 200) {
+        qCWarning(lcPropagateUploadDelta) << "Failed to fetch remote block map, HTTP" << httpCode;
+        fallbackToNormalUpload();
+        return;
+    }
+
+    QByteArray body = reply->readAll();
+    _remoteBlockMap = parseServerBlockMap(body);
+    if (_remoteBlockMap.blockCount == 0) {
+        qCInfo(lcPropagateUploadDelta) << "Empty remote block map, falling back";
+        fallbackToNormalUpload();
+        return;
+    }
+
+    // Compute local block map using the server's block size
+    qint64 blockSize = _remoteBlockMap.blockSize > 0 ? _remoteBlockMap.blockSize : DefaultBlockSize;
+    _localBlockMap = computeLocalBlockMap(_fileToUpload._path, blockSize);
+
+    if (_localBlockMap.blockCount == 0) {
+        qCWarning(lcPropagateUploadDelta) << "Failed to compute local block map";
+        fallbackToNormalUpload();
+        return;
+    }
+
+    // Compare
+    _changedBlocks = findChangedBlocks(_localBlockMap, _remoteBlockMap);
+
+    if (_changedBlocks.isEmpty()) {
+        qCInfo(lcPropagateUploadDelta) << "File is identical, no upload needed:" << _item->_file;
+        // File is identical — skip upload, mark as done
+        finalize();
+        return;
+    }
+
+    qint64 changedBytes = 0;
+    for (int idx : _changedBlocks) {
+        if (idx < _localBlockMap.signatures.size()) {
+            changedBytes += _localBlockMap.signatures[idx].size;
+        }
+    }
+    double savingsPercent = _localBlockMap.totalSize > 0
+        ? (1.0 - static_cast<double>(changedBytes) / _localBlockMap.totalSize) * 100.0
+        : 0.0;
+
+    qCInfo(lcPropagateUploadDelta) << "Delta sync:" << _changedBlocks.size()
+                                   << "of" << _localBlockMap.blockCount << "blocks changed,"
+                                   << changedBytes << "bytes to transfer ("
+                                   << QString::number(savingsPercent, 'f', 1) << "% savings)";
+
+    // Start uploading changed blocks
+    _currentBlockIndex = 0;
+    uploadNextBlock();
+}
+
+void PropagateUploadFileDelta::uploadNextBlock()
+{
+    if (_currentBlockIndex >= _changedBlocks.size()) {
+        // All blocks uploaded — finalize
+        auto url = propagator()->account()->url();
+        QString remotePath = _item->_file;
+        url.setPath(url.path() + _deltaAppBase + QStringLiteral("/api/finalize/") + remotePath);
+
+        auto *finalizeJob = new SimpleNetworkJob(propagator()->account(), this);
+        QNetworkRequest req;
+        req.setUrl(url);
+        req.setRawHeader("OCS-APIREQUEST", "true");
+        finalizeJob->startRequest("POST", url, req);
+        connect(finalizeJob, &SimpleNetworkJob::finishedSignal, this, &PropagateUploadFileDelta::slotFinalizeFinished);
+        return;
+    }
+
+    int blockIdx = _changedBlocks[_currentBlockIndex];
+    if (blockIdx >= _localBlockMap.signatures.size()) {
+        qCWarning(lcPropagateUploadDelta) << "Block index out of range:" << blockIdx;
+        fallbackToNormalUpload();
+        return;
+    }
+
+    const BlockSignature &sig = _localBlockMap.signatures[blockIdx];
+
+    // Read block data from local file
+    QFile file(_fileToUpload._path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qCWarning(lcPropagateUploadDelta) << "Cannot open local file for block read";
+        fallbackToNormalUpload();
+        return;
+    }
+    file.seek(sig.offset);
+    QByteArray blockData = file.read(sig.size);
+    file.close();
+
+    if (blockData.size() != sig.size) {
+        qCWarning(lcPropagateUploadDelta) << "Short read for block" << blockIdx;
+        fallbackToNormalUpload();
+        return;
+    }
+
+    qCDebug(lcPropagateUploadDelta) << "Uploading block" << blockIdx
+                                    << "offset=" << sig.offset
+                                    << "size=" << sig.size;
+
+    auto url = propagator()->account()->url();
+    QString remotePath = _item->_file;
+    url.setPath(url.path() + _deltaAppBase + QStringLiteral("/api/blocks/") + remotePath);
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("offset"), QString::number(sig.offset));
+    query.addQueryItem(QStringLiteral("size"), QString::number(sig.size));
+    url.setQuery(query);
+
+    auto *putJob = new SimpleNetworkJob(propagator()->account(), this);
+    QNetworkRequest req;
+    req.setUrl(url);
+    req.setRawHeader("Content-Type", "application/octet-stream");
+    req.setRawHeader("OCS-APIREQUEST", "true");
+
+    auto *buffer = new QBuffer(this);
+    buffer->setData(blockData);
+    buffer->open(QIODevice::ReadOnly);
+
+    putJob->startRequest("POST", url, req, buffer);
+    connect(putJob, &SimpleNetworkJob::finishedSignal, this, &PropagateUploadFileDelta::slotBlockUploaded);
+}
+
+void PropagateUploadFileDelta::slotBlockUploaded()
+{
+    auto *job = qobject_cast<SimpleNetworkJob *>(sender());
+    if (!job) {
+        fallbackToNormalUpload();
+        return;
+    }
+
+    auto reply = job->reply();
+    int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    if (reply->error() != QNetworkReply::NoError || httpCode != 200) {
+        qCWarning(lcPropagateUploadDelta) << "Block upload failed, HTTP" << httpCode;
+        fallbackToNormalUpload();
+        return;
+    }
+
+    _currentBlockIndex++;
+    uploadNextBlock();
+}
+
+void PropagateUploadFileDelta::slotFinalizeFinished()
+{
+    auto *job = qobject_cast<SimpleNetworkJob *>(sender());
+    if (!job) {
+        fallbackToNormalUpload();
+        return;
+    }
+
+    auto reply = job->reply();
+    int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    if (reply->error() != QNetworkReply::NoError || httpCode != 200) {
+        qCWarning(lcPropagateUploadDelta) << "Finalize failed, HTTP" << httpCode;
+        fallbackToNormalUpload();
+        return;
+    }
+
+    qCInfo(lcPropagateUploadDelta) << "Delta sync completed for" << _item->_file;
+    finalize();
+}
+
+void PropagateUploadFileDelta::fallbackToNormalUpload()
+{
+    qCInfo(lcPropagateUploadDelta) << "Falling back to normal upload for" << _item->_file;
+
+    // Create a non-delta upload job directly (avoid recursion via createUploadJob)
+    std::unique_ptr<PropagateUploadFileCommon> job;
+    if (_item->_size > propagator()->syncOptions()._initialChunkSize
+        && propagator()->account()->capabilities().chunkingNg()) {
+        job = std::make_unique<PropagateUploadFileNG>(propagator(), _item);
+    } else {
+        job = std::make_unique<PropagateUploadFileV1>(propagator(), _item);
+    }
+    job->setDeleteExisting(false);
+    job->start();
+}
+
+void PropagateUploadFileDelta::abort(PropagatorJob::AbortType abortType)
+{
+    abortNetworkJobs(abortType,
+        [](AbstractNetworkJob *) { return true; });
+}
+
+} // namespace OCC
