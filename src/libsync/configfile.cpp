@@ -1068,6 +1068,18 @@ void ConfigFile::setForceLoginV2(bool isChecked)
     setValue(forceLoginV2C, isChecked);
 }
 
+static constexpr char deltaSyncEnabledC[] = "deltaSyncEnabled";
+
+bool ConfigFile::deltaSyncEnabled() const
+{
+    return getValue(deltaSyncEnabledC, QString(), true).toBool();
+}
+
+void ConfigFile::setDeltaSyncEnabled(bool enabled)
+{
+    setValue(deltaSyncEnabledC, enabled);
+}
+
 bool ConfigFile::showMainDialogAsNormalWindow() const {
     return getValue(showMainDialogAsNormalWindowC, {}, false).toBool();
 }

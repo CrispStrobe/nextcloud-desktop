@@ -153,6 +153,12 @@ public:
     [[nodiscard]] bool forceLoginV2() const;
     void setForceLoginV2(bool);
 
+    /** Whether block-level delta sync is enabled for large files.
+     *  Requires the crispcloud_delta server app to be installed.
+     *  When enabled, only changed 4 MB blocks are uploaded instead of full files. */
+    [[nodiscard]] bool deltaSyncEnabled() const;
+    void setDeltaSyncEnabled(bool enabled);
+
     [[nodiscard]] bool showMainDialogAsNormalWindow() const;
 
     static bool setConfDir(const QString &value);
