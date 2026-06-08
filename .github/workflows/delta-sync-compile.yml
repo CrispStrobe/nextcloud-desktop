@@ -110,6 +110,19 @@ jobs:
 
           craft --test nextcloud-client
 
+      - name: Fix upstream blueprint (missing import os)
+        shell: pwsh
+        run: |
+          $bp = Get-ChildItem -Recurse -Path "${{ github.workspace }}/${{ env.CRAFT_TARGET }}" -Filter "nextcloud-client.py" | Where-Object { $_.FullName -match "blueprints" } | Select-Object -First 1
+          if ($bp) {
+            $content = Get-Content $bp.FullName -Raw
+            if ($content -notmatch "^import os" -and $content -notmatch "`nimport os") {
+              $content = "import os`n" + $content
+              Set-Content $bp.FullName $content
+              Write-Host "Patched $($bp.FullName): added 'import os'"
+            }
+          }
+
       - name: Package
         shell: pwsh
         run: |
@@ -184,6 +197,14 @@ jobs:
 
           craft --set srcDir="$GITHUB_WORKSPACE" nextcloud-client
           craft --no-cache nextcloud-client
+
+      - name: Fix upstream blueprint (missing import os)
+        run: |
+          BP=$(find "${{ github.workspace }}/$CRAFT_TARGET" -path "*/blueprints/*/nextcloud-client/nextcloud-client.py" 2>/dev/null | head -1)
+          if [ -n "$BP" ] && ! grep -q "^import os" "$BP"; then
+            sed -i '' '1s/^/import os\n/' "$BP"
+            echo "Patched $BP: added 'import os'"
+          fi
 
       - name: Package
         run: |
