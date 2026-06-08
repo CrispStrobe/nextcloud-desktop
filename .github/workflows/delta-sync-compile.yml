@@ -216,13 +216,25 @@ jobs:
               python3 "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
           }
 
-          craft --package nextcloud-client
+          # Try CraftMaster packaging first, fall back to manual DMG
+          craft --package nextcloud-client || {
+            echo "CraftMaster packaging failed, creating DMG manually..."
+            APP_DIR=$(find "${{ github.workspace }}/$CRAFT_TARGET" -name "Nextcloud.app" -maxdepth 5 | head -1)
+            if [ -n "$APP_DIR" ]; then
+              DMG_NAME="Nextcloud-delta-sync-macOS-arm64.dmg"
+              hdiutil create -volname "Nextcloud Delta Sync" -srcfolder "$APP_DIR" \
+                -ov -format UDZO "${{ github.workspace }}/$CRAFT_TARGET/$DMG_NAME"
+              echo "Created $DMG_NAME"
+            fi
+          }
 
       - name: Collect artifacts
         run: |
           mkdir -p "${{ github.workspace }}/binaries"
           cp -v ~/craft/binaries/* "${{ github.workspace }}/binaries/" 2>/dev/null || true
           find "${{ github.workspace }}/$CRAFT_TARGET" -name "*.dmg" -exec cp -v {} "${{ github.workspace }}/binaries/" \; 2>/dev/null || true
+          find "${{ github.workspace }}/$CRAFT_TARGET" -name "Nextcloud*.app" -maxdepth 5 -exec sh -c \
+            'tar czf "${{ github.workspace }}/binaries/Nextcloud-delta-sync-macOS-arm64.app.tar.gz" -C "$(dirname "$1")" "$(basename "$1")"' _ {} \; 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
