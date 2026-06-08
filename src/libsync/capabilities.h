@@ -79,6 +79,9 @@ public:
     /// Whether the "privatelink" DAV property is available
     [[nodiscard]] bool privateLinkPropertyAvailable() const;
 
+    /// returns true if the crispcloud_delta app is available for block-level delta sync
+    [[nodiscard]] bool deltaSyncAvailable() const;
+
     /// returns true if the capabilities report notifications
     [[nodiscard]] bool notificationsAvailable() const;
 

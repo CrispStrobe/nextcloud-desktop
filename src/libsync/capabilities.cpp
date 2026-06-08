@@ -253,6 +253,13 @@ bool Capabilities::bulkUpload() const
     return _capabilities["dav"].toMap()["bulkupload"].toByteArray() >= "1.0";
 }
 
+bool Capabilities::deltaSyncAvailable() const
+{
+    // The crispcloud_delta app registers itself under the "crispcloud_delta" capability key.
+    // Detection also happens at runtime via GET /api/status, but this provides a fast check.
+    return _capabilities.contains("crispcloud_delta");
+}
+
 bool Capabilities::filesLockAvailable() const
 {
     return _capabilities["files"].toMap()["locking"].toByteArray() >= "1.0";
