@@ -1251,7 +1251,7 @@ void User::processCompletedSyncItem(const Folder *folder, const SyncFileItemPtr 
 
             // Show desktop notification for significant savings (> 50%)
             if (item->_deltaSyncInfo.contains(QLatin1String("saved"))
-                && ConfigFile().optionalDesktopNotifications()) {
+                && ConfigFile().optionalServerNotifications()) {
                 showDesktopNotification(
                     tr("Delta sync: %1").arg(fileName),
                     item->_deltaSyncInfo,
