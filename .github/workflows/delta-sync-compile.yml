@@ -88,3 +88,53 @@ jobs:
           }
 
           craft --test nextcloud-client
+
+  build-macos:
+    name: macOS Clang compile
+    runs-on: macos-15
+    env:
+      CRAFT_TARGET: macos-clang-arm64
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}/CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}/craftmaster.ini
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Craft Master with Nextcloud Client Deps
+        run: |
+          git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git "$CRAFT_MASTER_LOCATION"
+
+          function craft() {
+              python3 "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
+          }
+
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|master|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/desktop-client-blueprints.git|master|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Compile
+        run: |
+          function craft() {
+              python3 "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
+          }
+
+          craft --set srcDir="$GITHUB_WORKSPACE" nextcloud-client
+          craft --no-cache nextcloud-client
+
+      - name: Run tests
+        run: |
+          function craft() {
+              python3 "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
+          }
+
+          craft --test nextcloud-client
