@@ -10,6 +10,7 @@
 #include "account.h"
 #include "owncloudpropagator.h"
 #include "common/syncjournaldb.h"
+#include "common/utility.h"
 #include "filesystem.h"
 #include "propagateupload.h"
 
@@ -382,10 +383,15 @@ void PropagateUploadFileDelta::slotFinalizeFinished()
         ? (1.0 - static_cast<double>(transferredBytes) / totalBytes) * 100.0
         : 0.0;
 
+    _item->_deltaSyncInfo = QStringLiteral("%1/%2 blocks, %3 of %4 transferred (%5% saved)")
+        .arg(_changedBlocks.size())
+        .arg(_localBlockMap.blockCount)
+        .arg(Utility::octetsToString(transferredBytes))
+        .arg(Utility::octetsToString(totalBytes))
+        .arg(QString::number(savings, 'f', 1));
+
     qCInfo(lcPropagateUploadDelta) << "Delta sync completed for" << _item->_file
-        << "— uploaded" << _changedBlocks.size() << "/" << _localBlockMap.blockCount
-        << "blocks," << transferredBytes << "/" << totalBytes << "bytes"
-        << "(" << QString::number(savings, 'f', 1) << "% bandwidth saved)";
+        << "—" << _item->_deltaSyncInfo;
     finalize();
 }
 
