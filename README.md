@@ -3,7 +3,42 @@
   - SPDX-FileCopyrightText: 2011 Nextcloud GmbH and Nextcloud contributors
   - SPDX-License-Identifier: GPL-2.0-or-later
 -->
-# Nextcloud Desktop Client
+# Nextcloud Desktop Client — Delta Sync Fork
+
+> **This is a fork of [nextcloud/desktop](https://github.com/nextcloud/desktop) that adds block-level delta sync.**
+>
+> When the [CrispCloud Delta Sync](https://github.com/CrispStrobe/crispcloud-delta-sync) server app is installed on your Nextcloud, this client uploads only the 4 MB blocks that actually changed — instead of re-uploading entire files. A 500 MB VeraCrypt container where 8 MB changed? Only 2 blocks uploaded, **98.4% bandwidth saved**.
+>
+> **Branch:** `delta-sync` | **Status:** CI-verified on Linux, Windows, macOS
+
+## What's different from upstream
+
+| Feature | Upstream | This fork |
+|---------|----------|-----------|
+| Large file upload | Full re-upload or chunked | Block-level delta (Adler-32 + SHA-256 per 4 MB block) |
+| Settings toggle | N/A | General Settings > "Enable block-level delta sync for large files" |
+| Activity display | "You changed file.bin" | "You changed file.bin (delta sync: 2/125 blocks, 98.4% saved)" |
+| Desktop notification | N/A | Shows bandwidth savings on delta sync completion |
+| Logging | N/A | Full category logging under `lcPropagateUploadDelta` |
+| Fallback | N/A | Graceful fallback to chunked upload if server app unavailable |
+
+### Requirements
+
+- **Server:** Install the [crispcloud_delta](https://github.com/CrispStrobe/crispcloud-delta-sync) Nextcloud app
+- **File size:** Delta sync activates for files >= 10 MB
+- **Compatibility:** Nextcloud 25+
+
+### Files changed
+
+- `src/libsync/propagateuploaddelta.h/.cpp` — new `PropagateUploadFileDelta` class
+- `src/libsync/capabilities.h/.cpp` — `deltaSyncAvailable()` capability check
+- `src/libsync/configfile.h/.cpp` — `deltaSyncEnabled()` settings toggle
+- `src/libsync/owncloudpropagator.cpp` — integration into upload job creation
+- `src/gui/generalsettings.ui/.cpp` — settings checkbox
+- `src/gui/tray/usermodel.cpp` — activity display + notifications
+- `src/libsync/syncfileitem.h` — `_deltaSyncInfo` field
+
+---
 
 [![REUSE status](https://api.reuse.software/badge/github.com/nextcloud/desktop)](https://api.reuse.software/info/github.com/nextcloud/desktop)
 
