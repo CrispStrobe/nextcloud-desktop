@@ -35,7 +35,7 @@ These are built automatically from the `delta-sync` branch on every push.
 
 ### Requirements
 
-- **Server:** Install the [crispcloud_delta](https://github.com/CrispStrobe/crispcloud-delta-sync) Nextcloud app (tested on NC 33 / PHP 8.3)
+- **Server:** Install the [crispcloud_delta](https://github.com/CrispStrobe/crispcloud-delta-sync) app — PHP for Nextcloud 25–33 / ownCloud 10.11+, or the [Go sidecar](https://github.com/CrispStrobe/crispcloud-delta-sync/tree/main/ocis) for oCIS v5+
 - **File size:** Delta sync activates for files >= 10 MB
 - **Compatibility:** Nextcloud 25–33; branch is rebased onto upstream `master`
 
