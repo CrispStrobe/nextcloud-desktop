@@ -66,6 +66,18 @@ public:
 
     void doStartUpload() override;
 
+    /// Adler-32 checksum (RFC 1950), matching the server's PHP implementation.
+    static quint32 adler32(const QByteArray &data);
+
+    /// Compute the local block map for a file at the given path.
+    static BlockMap computeLocalBlockMap(const QString &filePath, qint64 blockSize);
+
+    /// Parse server JSON block map response.
+    static BlockMap parseServerBlockMap(const QByteArray &json);
+
+    /// Compare local vs remote block maps, return list of changed block indices.
+    static QVector<int> findChangedBlocks(const BlockMap &local, const BlockMap &remote);
+
 public slots:
     void abort(PropagatorJob::AbortType abortType) override;
 
@@ -76,17 +88,6 @@ private slots:
     void slotFinalizeFinished();
 
 private:
-    /// Adler-32 checksum (RFC 1950), matching the server's PHP implementation.
-    static quint32 adler32(const QByteArray &data);
-
-    /// Compute the local block map for the file being uploaded.
-    BlockMap computeLocalBlockMap(const QString &filePath, qint64 blockSize);
-
-    /// Parse server JSON block map response.
-    static BlockMap parseServerBlockMap(const QByteArray &json);
-
-    /// Compare local vs remote block maps, return list of changed block indices.
-    static QVector<int> findChangedBlocks(const BlockMap &local, const BlockMap &remote);
 
     /// Fall back to normal (non-delta) upload.
     void fallbackToNormalUpload();

@@ -228,7 +228,7 @@ void PropagateUploadFileDelta::slotBlockMapFetched()
 
     // Compute local block map using the server's block size
     qint64 blockSize = _remoteBlockMap.blockSize > 0 ? _remoteBlockMap.blockSize : DefaultBlockSize;
-    _localBlockMap = computeLocalBlockMap(_fileToUpload._path, blockSize);
+    _localBlockMap = PropagateUploadFileDelta::computeLocalBlockMap(_fileToUpload._path, blockSize);
 
     if (_localBlockMap.blockCount == 0) {
         qCWarning(lcPropagateUploadDelta) << "Failed to compute local block map";
@@ -273,6 +273,10 @@ void PropagateUploadFileDelta::uploadNextBlock()
         auto url = propagator()->account()->url();
         QString remotePath = _item->_file;
         url.setPath(url.path() + _deltaAppBase + QStringLiteral("/api/finalize/") + remotePath);
+
+        QUrlQuery finalizeQuery;
+        finalizeQuery.addQueryItem(QStringLiteral("size"), QString::number(_localBlockMap.totalSize));
+        url.setQuery(finalizeQuery);
 
         auto *finalizeJob = new SimpleNetworkJob(propagator()->account(), this);
         QNetworkRequest req;
