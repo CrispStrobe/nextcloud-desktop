@@ -29,14 +29,15 @@ These are built automatically from the `delta-sync` branch on every push.
 | Settings toggle | N/A | General Settings > "Enable block-level delta sync for large files" |
 | Activity display | "You changed file.bin" | "You changed file.bin (delta sync: 2/125 blocks, 98.4% saved)" |
 | Desktop notification | N/A | Shows bandwidth savings on delta sync completion |
-| Logging | N/A | Full category logging under `lcPropagateUploadDelta` |
+| Logging | N/A | Full category logging under `nextcloud.sync.propagator.upload.delta` |
 | Fallback | N/A | Graceful fallback to chunked upload if server app unavailable |
+| File shrink | Re-upload corrupts tail | Finalize sends `?size=N`; server truncates to exact new size |
 
 ### Requirements
 
-- **Server:** Install the [crispcloud_delta](https://github.com/CrispStrobe/crispcloud-delta-sync) Nextcloud app
+- **Server:** Install the [crispcloud_delta](https://github.com/CrispStrobe/crispcloud-delta-sync) Nextcloud app (tested on NC 33 / PHP 8.3)
 - **File size:** Delta sync activates for files >= 10 MB
-- **Compatibility:** Nextcloud 25+
+- **Compatibility:** Nextcloud 25–33; branch is rebased onto upstream `master`
 
 ### Files changed
 
@@ -47,6 +48,7 @@ These are built automatically from the `delta-sync` branch on every push.
 - `src/gui/generalsettings.ui/.cpp` — settings checkbox
 - `src/gui/tray/usermodel.cpp` — activity display + notifications
 - `src/libsync/syncfileitem.h` — `_deltaSyncInfo` field
+- `test/testdeltasync.cpp` — 11 unit tests (Adler-32 correctness, block map construction, diff logic, JSON parsing)
 
 ---
 
